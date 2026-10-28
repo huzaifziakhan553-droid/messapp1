@@ -1,0 +1,37 @@
+{
+    "members": {
+        "Huzaifa": {
+            "paid": 0.0,
+            "consumed": 0.0
+        },
+        "Friend 2": {
+            "paid": 0.0,
+            "consumed": 0.0
+        },
+        "Friend 3": {
+            "paid": 0.0,
+            "consumed": 0.0
+        },
+        "Friend 4": {
+            "paid": 0.0,
+            "consumed": 0.0
+        },
+        "Friend 5": {
+            "paid": 0.0,
+            "consumed": 0.0
+        },
+        "Friend 6": {
+            "paid": 0.0,
+            "consumed": 0.0
+        },
+        "Friend 7": {
+            "paid": 0.0,
+            "consumed": 0.0
+        },
+        "Friend 8": {
+            "paid": 0.0,
+            "consumed": 0.0
+        }
+    },
+    "history": []
+}
