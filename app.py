@@ -358,7 +358,7 @@ def view_dashboard(current_user):
             </div>
             """, unsafe_allow_html=True)
     else:
-        # Member's own hisab kitab metrics
+        # Member's own hisab kitab metrics jj
         with c2:
             my_net = my_bal["net_balance"]
             color = "#166534" if my_net >= 0 else "#dc2626"
