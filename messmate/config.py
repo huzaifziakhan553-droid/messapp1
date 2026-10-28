@@ -10,7 +10,8 @@ if ENV_PATH.exists():
 else:
     load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR / 'messmate.db'}")
+db_file = (BASE_DIR / "messmate.db").as_posix()
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{db_file}")
 MESS_NAME = os.getenv("MESS_NAME", "MessMate - Hostel Mess")
 CURRENCY = os.getenv("CURRENCY", "PKR")
 CURRENCY_SYMBOL = os.getenv("CURRENCY_SYMBOL", "Rs.")

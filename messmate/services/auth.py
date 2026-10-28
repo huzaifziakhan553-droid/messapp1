@@ -92,7 +92,15 @@ def authenticate_user(session: Session, username: str, password: str) -> Tuple[O
     if locked:
         return None, f"Too many failed login attempts. Please wait {remaining} seconds before trying again."
 
-    user = session.query(User).filter(User.username == clean_username).first()
+    try:
+        user = session.query(User).filter(User.username == clean_username).first()
+    except Exception:
+        # Failsafe: in case tables are uninitialized in fresh container
+        from messmate.database import init_db
+        from messmate.seed import seed_initial_eight_members
+        init_db()
+        seed_initial_eight_members(session)
+        user = session.query(User).filter(User.username == clean_username).first()
     if not user:
         record_failed_attempt(clean_username)
         return None, "Invalid username or password."

@@ -160,11 +160,14 @@ st.markdown("""
 
 
 # Initialize DB and Seed once
-@st.cache_resource
 def ensure_database_initialized():
-    init_db()
-    with get_db() as session:
-        seed_initial_eight_members(session)
+    try:
+        init_db()
+        with get_db() as session:
+            seed_initial_eight_members(session)
+    except Exception as e:
+        import logging
+        logging.warning(f"ensure_database_initialized notice: {e}")
 
 ensure_database_initialized()
 
@@ -197,20 +200,37 @@ def render_login_view():
                     if not username_input or not password_input:
                         st.error("Please enter both username and password.")
                     else:
-                        with get_db() as session:
-                            user, err = authenticate_user(session, username_input, password_input)
-                            if user:
-                                st.session_state.user = {
-                                    "id": user.id,
-                                    "username": user.username,
-                                    "display_name": user.display_name,
-                                    "role": user.role,
-                                    "phone_number": user.phone_number
-                                }
-                                st.success(f"Welcome back, {user.display_name}!")
-                                st.rerun()
-                            else:
-                                st.error(err)
+                        try:
+                            with get_db() as session:
+                                user, err = authenticate_user(session, username_input, password_input)
+                                if user:
+                                    st.session_state.user = {
+                                        "id": user.id,
+                                        "username": user.username,
+                                        "display_name": user.display_name,
+                                        "role": user.role,
+                                        "phone_number": user.phone_number
+                                    }
+                                    st.success(f"Welcome back, {user.display_name}!")
+                                    st.rerun()
+                                else:
+                                    st.error(err)
+                        except Exception as e:
+                            ensure_database_initialized()
+                            with get_db() as session:
+                                user, err = authenticate_user(session, username_input, password_input)
+                                if user:
+                                    st.session_state.user = {
+                                        "id": user.id,
+                                        "username": user.username,
+                                        "display_name": user.display_name,
+                                        "role": user.role,
+                                        "phone_number": user.phone_number
+                                    }
+                                    st.success(f"Welcome back, {user.display_name}!")
+                                    st.rerun()
+                                else:
+                                    st.error(err or f"Error connecting to database: {e}")
 
     with tab_signup:
         col1, col2, col3 = st.columns([1, 2, 1])
