@@ -1,6 +1,6 @@
 import os
 from contextlib import contextmanager
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from messmate.config import DATABASE_URL
 
@@ -43,8 +43,16 @@ def get_db():
 
 
 def init_db():
-    """Create all tables in the database."""
+    """Create all tables in the database and ensure column migrations."""
     # Import all models so that Base.metadata has knowledge of all tables
     import messmate.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+
+    # Check and add approval_status column if missing in existing database
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN approval_status VARCHAR(20) DEFAULT 'approved'"))
+            conn.commit()
+        except Exception:
+            pass  # Already present
 

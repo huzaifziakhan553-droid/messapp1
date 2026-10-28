@@ -97,8 +97,14 @@ def authenticate_user(session: Session, username: str, password: str) -> Tuple[O
         record_failed_attempt(clean_username)
         return None, "Invalid username or password."
 
+    if getattr(user, "approval_status", "approved") == "pending":
+        return None, "Your registration is pending approval by administrator Huzaifa. Please wait for activation."
+
+    if getattr(user, "approval_status", "approved") == "rejected":
+        return None, "Your registration request was rejected by the mess administrator."
+
     if not user.is_active:
-        return None, "This account has been deactivated. Please contact the mess administrator."
+        return None, "This account is currently inactive. Please contact administrator Huzaifa."
 
     if not verify_password(user.password_hash, password):
         attempts, lockout = record_failed_attempt(clean_username)
@@ -131,4 +137,66 @@ def admin_reset_password(session: Session, target_user: User, new_password: str)
     session.add(target_user)
     session.commit()
     return True, f"Password for {target_user.display_name} has been reset."
+
+
+def register_user(
+    session: Session,
+    username: str,
+    password: str,
+    display_name: str,
+    phone_number: Optional[str] = None
+) -> Tuple[Optional[User], Optional[str]]:
+    """
+    Public member registration. Creates an inactive account with pending approval.
+    Administrator Huzaifa must approve the request before the member can log in.
+    """
+    clean_username = username.strip().lower()
+    if not clean_username:
+        return None, "Username cannot be empty."
+    if len(clean_username) < 3:
+        return None, "Username must be at least 3 characters long."
+    if len(password) < 6:
+        return None, "Password must be at least 6 characters long."
+    if not display_name or not display_name.strip():
+        return None, "Display name is required."
+
+    existing = session.query(User).filter(User.username == clean_username).first()
+    if existing:
+        return None, f"Username '{clean_username}' is already taken. Please pick another."
+
+    new_user = User(
+        username=clean_username,
+        display_name=display_name.strip(),
+        phone_number=phone_number.strip() if phone_number else None,
+        password_hash=hash_password(password),
+        role="member",
+        is_active=False,
+        approval_status="pending"
+    )
+    session.add(new_user)
+    session.commit()
+    session.refresh(new_user)
+    return new_user, None
+
+
+def approve_user_registration(session: Session, user_id: int, admin_id: Optional[int] = None) -> Tuple[bool, str]:
+    """Administrator approves a pending user registration and activates the account."""
+    user = session.query(User).filter(User.id == user_id).first()
+    if not user:
+        return False, "User not found."
+    user.approval_status = "approved"
+    user.is_active = True
+    session.commit()
+    return True, f"Account for {user.display_name} ({user.username}) approved and activated!"
+
+
+def reject_user_registration(session: Session, user_id: int, admin_id: Optional[int] = None) -> Tuple[bool, str]:
+    """Administrator rejects a pending user registration."""
+    user = session.query(User).filter(User.id == user_id).first()
+    if not user:
+        return False, "User not found."
+    user.approval_status = "rejected"
+    user.is_active = False
+    session.commit()
+    return True, f"Registration for {user.display_name} ({user.username}) rejected."
 

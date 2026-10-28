@@ -1,8 +1,9 @@
 """
 MessMate Web Application Server
 A zero-dependency, responsive web server using Python's standard library and SQLAlchemy.
-Allows all 8 roommates to access the system immediately from any browser (laptop or mobile).
-Shares the exact same database and business logic with `app.py` (Streamlit) and `cli.py`.
+Supports Huzaifa as Admin, member self-registration with admin approvals,
+strict hisab-kitab privacy (members see mess pool remaining + their personal hisab kitab only),
+and comprehensive admin editing and password resets.
 """
 
 import sys
@@ -25,9 +26,15 @@ if sys.platform == "win32":
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from messmate.database import init_db, get_db
-from messmate.seed import seed_initial_eight_members, seed_sample_demo_data
-from messmate.models import User, Meal, Deposit, SharedExpense, DisputeRequest, AuditLog
-from messmate.services.auth import authenticate_user, hash_password
+from messmate.seed import seed_initial_eight_members
+from messmate.models import User, Meal, MealAttendance, Deposit, SharedExpense, DisputeRequest, AuditLog
+from messmate.services.auth import (
+    authenticate_user,
+    register_user,
+    approve_user_registration,
+    reject_user_registration,
+    admin_reset_password
+)
 from messmate.services.finance import (
     calculate_member_balance,
     calculate_all_balances,
@@ -62,6 +69,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             --danger-bg: #fee2e2;
             --success: #166534;
             --success-bg: #dcfce7;
+            --warning: #b45309;
+            --warning-bg: #fef3c7;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         body { background-color: var(--bg-light); color: var(--text-dark); line-height: 1.5; padding-bottom: 40px; }
@@ -74,9 +83,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             justify-content: space-between;
             align-items: center;
             box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            flex-wrap: wrap;
+            gap: 12px;
         }
-        .navbar h1 { font-size: 1.4rem; display: flex; align-items: center; gap: 8px; }
-        .nav-user { display: flex; align-items: center; gap: 12px; font-size: 0.9rem; }
+        .navbar h1 { font-size: 1.35rem; display: flex; align-items: center; gap: 8px; }
+        .nav-user { display: flex; align-items: center; gap: 12px; font-size: 0.9rem; flex-wrap: wrap; }
         .nav-btn { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-size: 0.85rem; font-weight: 600; }
         .nav-btn:hover { background: rgba(255,255,255,0.3); }
 
@@ -85,11 +96,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
         .metric-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 18px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
         .metric-title { font-size: 0.78rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
-        .metric-value { font-size: 1.7rem; font-weight: 700; color: var(--text-dark); }
+        .metric-value { font-size: 1.65rem; font-weight: 700; color: var(--text-dark); }
         .metric-sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 4px; }
 
         .card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 22px 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 24px; }
-        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; flex-wrap: wrap; gap: 8px; }
         .card-header h2 { font-size: 1.2rem; color: var(--text-dark); display: flex; align-items: center; gap: 8px; }
 
         table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.92rem; }
@@ -101,8 +112,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .badge-credit { background: var(--success-bg); color: var(--success); padding: 4px 10px; border-radius: 9999px; font-weight: 700; font-size: 0.82rem; display: inline-block; }
         .badge-dues { background: var(--danger-bg); color: var(--danger); padding: 4px 10px; border-radius: 9999px; font-weight: 700; font-size: 0.82rem; display: inline-block; }
         .badge-settled { background: #f1f5f9; color: var(--text-muted); padding: 4px 10px; border-radius: 9999px; font-weight: 700; font-size: 0.82rem; display: inline-block; }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); padding: 4px 10px; border-radius: 9999px; font-weight: 700; font-size: 0.82rem; display: inline-block; }
 
-        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 16px; }
+        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 16px; }
         .form-group { display: flex; flex-direction: column; gap: 6px; }
         .form-group label { font-size: 0.85rem; font-weight: 600; color: #334155; }
         .form-group input, .form-group select, .form-group textarea {
@@ -117,6 +129,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .btn-whatsapp:hover { background: #1eb855; }
         .btn-secondary { background: #f1f5f9; color: #334155; border: 1px solid var(--border-color); }
         .btn-secondary:hover { background: #e2e8f0; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: #b91c1c; }
+        .btn-sm { padding: 6px 12px; font-size: 0.82rem; }
 
         .attendance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 12px 0 18px 0; }
         .att-label { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; font-size: 0.9rem; font-weight: 500; }
@@ -124,6 +139,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         .alert-success { background: #dcfce7; border: 1px solid #bbf7d0; color: #166534; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 0.92rem; }
         .alert-error { background: #fee2e2; border: 1px solid #fecaca; color: #991b1b; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 0.92rem; }
+        .alert-info { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-size: 0.92rem; }
+
+        .tabs-header { display: flex; gap: 8px; border-bottom: 2px solid var(--border-color); margin-bottom: 20px; }
+        .tab-btn { padding: 10px 18px; background: none; border: none; font-size: 0.95rem; font-weight: 600; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+        .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
     </style>
 </head>
 <body>
@@ -177,9 +197,10 @@ class MessMateHandler(BaseHTTPRequestHandler):
 
         user = self.get_current_user()
 
-        # Route /login
+        # Route /login or unauthenticated
         if path == "/login" or not user:
-            self.render_login_page(msg_html)
+            tab = query.get("tab", ["login"])[0]
+            self.render_login_signup_page(msg_html, active_tab=tab)
             return
 
         # Route /logout
@@ -187,67 +208,107 @@ class MessMateHandler(BaseHTTPRequestHandler):
             self.send_redirect("/login", set_cookie="messmate_session=; Path=/; Max-Age=0")
             return
 
-        # Route /export/...
-        if path == "/export/balances.csv":
-            with get_db() as session:
-                csv_data = export_balances_csv(session)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", 'attachment; filename="messmate_balances.csv"')
-            self.end_headers()
-            self.wfile.write(csv_data.encode("utf-8"))
-            return
+        # Route /export/... (Admin only)
+        if path.startswith("/export/") and user["role"] == "admin":
+            if path == "/export/balances.csv":
+                with get_db() as session:
+                    csv_data = export_balances_csv(session)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv")
+                self.send_header("Content-Disposition", 'attachment; filename="messmate_balances.csv"')
+                self.end_headers()
+                self.wfile.write(csv_data.encode("utf-8"))
+                return
+            if path == "/export/meals.csv":
+                with get_db() as session:
+                    csv_data = export_meals_csv(session)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv")
+                self.send_header("Content-Disposition", 'attachment; filename="messmate_meals.csv"')
+                self.end_headers()
+                self.wfile.write(csv_data.encode("utf-8"))
+                return
+            if path == "/export/deposits.csv":
+                with get_db() as session:
+                    csv_data = export_deposits_csv(session)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv")
+                self.send_header("Content-Disposition", 'attachment; filename="messmate_deposits.csv"')
+                self.end_headers()
+                self.wfile.write(csv_data.encode("utf-8"))
+                return
 
-        if path == "/export/meals.csv":
-            with get_db() as session:
-                csv_data = export_meals_csv(session)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", 'attachment; filename="messmate_meals.csv"')
-            self.end_headers()
-            self.wfile.write(csv_data.encode("utf-8"))
-            return
-
-        if path == "/export/deposits.csv":
-            with get_db() as session:
-                csv_data = export_deposits_csv(session)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", 'attachment; filename="messmate_deposits.csv"')
-            self.end_headers()
-            self.wfile.write(csv_data.encode("utf-8"))
-            return
-
-        # Main Dashboard
+        # Route Main Dashboard
         self.render_dashboard(user, msg_html)
 
-    def render_login_page(self, msg_html):
-        content = f"""
-        <div style="max-width: 480px; margin: 40px auto;">
-            <div class="card">
-                <div class="card-header" style="justify-content: center;">
-                    <h2>🍲 Sign In to MessMate</h2>
+    def render_login_signup_page(self, msg_html, active_tab="login"):
+        is_login = active_tab != "signup"
+
+        tab_nav = f"""
+        <div class="tabs-header" style="justify-content: center;">
+            <a href="/login?tab=login" class="tab-btn {'active' if is_login else ''}" style="text-decoration: none;">🔑 Sign In</a>
+            <a href="/login?tab=signup" class="tab-btn {'active' if not is_login else ''}" style="text-decoration: none;">📝 Sign Up (New Roommate)</a>
+        </div>
+        """
+
+        if is_login:
+            form_content = """
+            <form method="POST" action="/api/login">
+                <div class="form-group" style="margin-bottom: 14px;">
+                    <label>Username</label>
+                    <input type="text" name="username" placeholder="e.g. huzaifa or friend2" required>
                 </div>
-                <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px; text-align: center;">
+                <div class="form-group" style="margin-bottom: 20px;">
+                    <label>Password</label>
+                    <input type="password" name="password" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Sign In 🚀</button>
+            </form>
+
+            <div style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-color); font-size: 0.85rem; color: var(--text-muted);">
+                <strong>💡 Sign-In Help:</strong>
+                <div style="margin-top: 4px;">• <strong>Admin:</strong> <code>huzaifa</code></div>
+                <div>• <strong>Roommates:</strong> Sign in with your approved username.</div>
+                <div>• <em>Forgot password? Contact Administrator Huzaifa to reset your credentials.</em></div>
+            </div>
+            """
+        else:
+            form_content = """
+            <div class="alert-info" style="font-size: 0.85rem; margin-bottom: 16px;">
+                📢 <strong>Note:</strong> After signing up, your account will be sent to <strong>Administrator Huzaifa</strong> for approval and activation before you can log in.
+            </div>
+            <form method="POST" action="/api/register">
+                <div class="form-group" style="margin-bottom: 12px;">
+                    <label>Your Full Name / Display Name</label>
+                    <input type="text" name="display_name" placeholder="e.g. Ali Ahmed" required>
+                </div>
+                <div class="form-group" style="margin-bottom: 12px;">
+                    <label>Desired Username</label>
+                    <input type="text" name="username" placeholder="e.g. ali" required>
+                </div>
+                <div class="form-group" style="margin-bottom: 12px;">
+                    <label>Phone Number (WhatsApp)</label>
+                    <input type="text" name="phone_number" placeholder="e.g. 03001234567">
+                </div>
+                <div class="form-group" style="margin-bottom: 20px;">
+                    <label>Password (At least 6 characters)</label>
+                    <input type="password" name="password" required minlength="6">
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Submit Registration 📝</button>
+            </form>
+            """
+
+        content = f"""
+        <div style="max-width: 480px; margin: 30px auto;">
+            <div class="card">
+                <div class="card-header" style="justify-content: center; border-bottom: none; padding-bottom: 0;">
+                    <h2>🍲 MessMate</h2>
+                </div>
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px; text-align: center;">
                     Hostel Mess Khaata System for Room 8 Friends
                 </p>
-                <form method="POST" action="/api/login">
-                    <div class="form-group" style="margin-bottom: 14px;">
-                        <label>Username</label>
-                        <input type="text" name="username" placeholder="e.g. huzaifa or friend2" required>
-                    </div>
-                    <div class="form-group" style="margin-bottom: 20px;">
-                        <label>Password</label>
-                        <input type="password" name="password" required>
-                    </div>
-                    <button type="submit" class="btn btn-primary" style="width: 100%;">Sign In 🚀</button>
-                </form>
-
-                <div style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border-color); font-size: 0.85rem; color: var(--text-muted);">
-                    <strong>💡 Demo Credentials:</strong>
-                    <div style="margin-top: 6px;">• <strong>Admin:</strong> <code>huzaifa</code> / <code>MessAdmin2026!</code></div>
-                    <div>• <strong>Roommates:</strong> <code>friend2</code> through <code>friend8</code> / <code>MessFriend123!</code></div>
-                </div>
+                {tab_nav}
+                {form_content}
             </div>
         </div>
         """
@@ -261,25 +322,55 @@ class MessMateHandler(BaseHTTPRequestHandler):
         self.send_html(html)
 
     def render_dashboard(self, user, msg_html):
+        is_admin = user["role"] == "admin"
+
         with get_db() as session:
             summary = get_mess_overall_summary(session)
-            members = calculate_all_balances(session, include_inactive=False)
             my_bal = calculate_member_balance(session, user["id"])
             
-            raw_meals = session.query(Meal).filter(Meal.date == date.today(), Meal.is_reversed == False).all()
-            today_meals_data = []
-            for tm in raw_meals:
-                presents = [a.user.display_name for a in tm.attendances if a.is_present]
-                today_meals_data.append({
-                    "meal_type": tm.meal_type,
-                    "title": tm.title,
-                    "total_cost": tm.total_cost,
-                    "per_head_cost": tm.per_head_cost,
-                    "presents": presents
+            # Fetch pending user registrations (Admin only)
+            pending_users = []
+            if is_admin:
+                pending_raw = session.query(User).filter(User.approval_status == "pending").all()
+                pending_users = [{"id": u.id, "name": u.display_name, "username": u.username, "phone": u.phone_number or "-", "created": u.created_at.strftime("%Y-%m-%d")} for u in pending_raw]
+
+            # Fetch all active users
+            raw_users = session.query(User).filter(User.is_active == True).order_by(User.id).all()
+            all_users_data = [{"id": u.id, "display_name": u.display_name, "username": u.username, "phone": u.phone_number or "-", "role": u.role} for u in raw_users]
+
+            # Fetch all users for admin edit tool
+            raw_all_registered = session.query(User).order_by(User.id).all()
+            all_registered_data = [{"id": u.id, "display_name": u.display_name, "username": u.username, "phone": u.phone_number or "", "role": u.role, "is_active": u.is_active} for u in raw_all_registered]
+
+            # Member's personal hisab kitab transactions
+            my_attendances = session.query(MealAttendance, Meal).join(Meal, Meal.id == MealAttendance.meal_id).filter(
+                MealAttendance.user_id == user["id"],
+                MealAttendance.is_present == True,
+                Meal.is_reversed == False
+            ).order_by(Meal.date.desc(), Meal.id.desc()).all()
+
+            my_meals_data = []
+            for att, m in my_attendances:
+                my_meals_data.append({
+                    "date": m.date.strftime("%Y-%m-%d"),
+                    "meal_type": m.meal_type.upper(),
+                    "title": m.title or m.category,
+                    "charged": att.charged_amount
                 })
 
-            raw_users = session.query(User).filter(User.is_active == True).order_by(User.id).all()
-            all_users_data = [{"id": u.id, "display_name": u.display_name, "username": u.username} for u in raw_users]
+            my_deposits_raw = session.query(Deposit).filter(Deposit.user_id == user["id"]).order_by(Deposit.date.desc(), Deposit.id.desc()).all()
+            my_deposits_data = []
+            for d in my_deposits_raw:
+                my_deposits_data.append({
+                    "date": d.date.strftime("%Y-%m-%d"),
+                    "amount": d.amount,
+                    "method": d.payment_method,
+                    "status": "❌ Reversed" if d.is_reversed else ("⏳ Pending" if d.status == "pending_approval" else "✅ Confirmed"),
+                    "notes": d.notes or "-"
+                })
+
+            # For admin: full members summary
+            all_member_balances = calculate_all_balances(session, include_inactive=False) if is_admin else []
             wa_text = generate_daily_whatsapp_report(session, date.today())
 
         wa_url = get_whatsapp_share_url(wa_text)
@@ -287,11 +378,11 @@ class MessMateHandler(BaseHTTPRequestHandler):
         # Personal Balance Pill
         bal = my_bal["net_balance"]
         if bal > Decimal("0.00"):
-            my_pill = f'<span class="badge-credit">🟢 My Balance: +Rs. {bal:,.2f}</span>'
+            my_pill = f'<span class="badge-credit">🟢 My Balance: +Rs. {bal:,.2f} (Credit)</span>'
         elif bal < Decimal("0.00"):
-            my_pill = f'<span class="badge-dues">🔴 My Balance: -Rs. {abs(bal):,.2f}</span>'
+            my_pill = f'<span class="badge-dues">🔴 My Balance: -Rs. {abs(bal):,.2f} (Dues)</span>'
         else:
-            my_pill = '<span class="badge-settled">⚪ My Balance: Rs. 0.00</span>'
+            my_pill = '<span class="badge-settled">⚪ My Balance: Rs. 0.00 (Clear)</span>'
 
         navbar = f"""
         <div class="navbar">
@@ -304,88 +395,268 @@ class MessMateHandler(BaseHTTPRequestHandler):
         </div>
         """
 
-        # Metrics cards
-        metrics_html = f"""
-        <div class="metrics-grid">
-            <div class="metric-card">
-                <div class="metric-title">Mess Pool (Cash in Hand)</div>
-                <div class="metric-value">Rs. {summary['cash_in_hand']:,.2f}</div>
-                <div class="metric-sub">Net available mess fund</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-title">Total Mess Expenses</div>
-                <div class="metric-value">Rs. {summary['total_spent']:,.2f}</div>
-                <div class="metric-sub">Meals + Shared items</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-title">Total Outstanding Dues</div>
-                <div class="metric-value" style="color: var(--danger);">Rs. {summary['total_dues']:,.2f}</div>
-                <div class="metric-sub">Pending roommate dues</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-title">Active Roommates</div>
-                <div class="metric-value">{summary['active_member_count']} Friends</div>
-                <div class="metric-sub">Accounting: {"✅ Balanced" if summary['is_balanced'] else "⚠️ Alert"}</div>
-            </div>
-        </div>
-        """
+        content_parts = []
 
-        # Table of members
-        member_rows = []
-        for m in members:
-            b = m["net_balance"]
-            if b > Decimal("0.00"):
-                badge = f'<span class="badge-credit">+Rs. {b:,.2f} (Credit)</span>'
-            elif b < Decimal("0.00"):
-                badge = f'<span class="badge-dues">-Rs. {abs(b):,.2f} (Dues)</span>'
-            else:
-                badge = '<span class="badge-settled">Rs. 0.00 (Clear)</span>'
-
-            member_rows.append(f"""
-            <tr>
-                <td><strong>{m['display_name']}</strong></td>
-                <td><code>{m['username']}</code></td>
-                <td>{m['phone_number'] or '-'}</td>
-                <td>Rs. {m['total_deposits']:,.2f}</td>
-                <td>Rs. {m['total_meal_charges']:,.2f}</td>
-                <td>Rs. {m['total_shared_charges']:,.2f}</td>
-                <td>{badge}</td>
-            </tr>
-            """)
-
-        members_table_html = f"""
-        <div class="card">
-            <div class="card-header">
-                <h2>👥 Roommate Khaata Accounts</h2>
-                <div style="display: flex; gap: 8px;">
-                    <a href="/export/balances.csv" class="btn btn-secondary">📥 Export Balances (CSV)</a>
-                    <a href="{wa_url}" target="_blank" class="btn btn-whatsapp">📲 WhatsApp Update</a>
+        # ==============================================================
+        # 1. METRICS ROW
+        # Both Admin and Members see Total Mess Money Remaining!
+        # Members see ONLY their own financial stats; Admin sees full mess stats.
+        # ==============================================================
+        if is_admin:
+            content_parts.append(f"""
+            <div class="metrics-grid">
+                <div class="metric-card" style="border-left: 4px solid var(--primary);">
+                    <div class="metric-title">🏦 Total Mess Pool (Money Remaining)</div>
+                    <div class="metric-value">Rs. {summary['cash_in_hand']:,.2f}</div>
+                    <div class="metric-sub">Net communal mess fund</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Total Mess Expenses</div>
+                    <div class="metric-value">Rs. {summary['total_spent']:,.2f}</div>
+                    <div class="metric-sub">Meals + Shared items</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Total Roommate Dues</div>
+                    <div class="metric-value" style="color: var(--danger);">Rs. {summary['total_dues']:,.2f}</div>
+                    <div class="metric-sub">Unpaid balances across roommates</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Active Roommates</div>
+                    <div class="metric-value">{summary['active_member_count']} Friends</div>
+                    <div class="metric-sub">Admin: <strong>Huzaifa</strong></div>
                 </div>
             </div>
-            <div style="overflow-x: auto;">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Roommate</th>
-                            <th>Username</th>
-                            <th>Phone</th>
-                            <th>Total Paid</th>
-                            <th>Meals Cost</th>
-                            <th>Shared Cost</th>
-                            <th>Net Balance</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {''.join(member_rows)}
-                    </tbody>
-                </table>
+            """)
+        else:
+            # REGULAR MEMBER VIEW:
+            # Sees Total Mess Money Remaining, but ONLY their personal hisab kitab!
+            content_parts.append(f"""
+            <div class="metrics-grid">
+                <div class="metric-card" style="border-left: 4px solid var(--primary);">
+                    <div class="metric-title">🏦 Total Mess Pool (Money Remaining)</div>
+                    <div class="metric-value">Rs. {summary['cash_in_hand']:,.2f}</div>
+                    <div class="metric-sub">Communal fund in mess pool</div>
+                </div>
+                <div class="metric-card" style="border-left: 4px solid {'#166534' if bal >= 0 else '#dc2626'};">
+                    <div class="metric-title">👤 My Net Balance</div>
+                    <div class="metric-value" style="color: {'var(--success)' if bal >= 0 else 'var(--danger)'};">
+                        {'Rs. ' if bal >= 0 else '-Rs. '}{abs(bal):,.2f}
+                    </div>
+                    <div class="metric-sub">{'🟢 Advance credit available' if bal >= 0 else '🔴 Outstanding dues pending'}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">💵 My Total Paid (Deposits)</div>
+                    <div class="metric-value">Rs. {my_bal['total_deposits']:,.2f}</div>
+                    <div class="metric-sub">All cash/digital deposits you paid</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">🍲 My Total Consumed</div>
+                    <div class="metric-value">Rs. {my_bal['total_consumed']:,.2f}</div>
+                    <div class="metric-sub">Meals & shared costs charged to you</div>
+                </div>
             </div>
-        </div>
-        """
+            """)
 
-        # Record Meal Form (Admin)
-        meal_form_html = ""
-        if user["role"] == "admin":
+        # ==============================================================
+        # 2. PENDING REGISTRATIONS (ADMIN ONLY)
+        # ==============================================================
+        if is_admin:
+            if pending_users:
+                pending_rows = []
+                for pu in pending_users:
+                    pending_rows.append(f"""
+                    <tr>
+                        <td><strong>{pu['name']}</strong></td>
+                        <td><code>{pu['username']}</code></td>
+                        <td>{pu['phone']}</td>
+                        <td>{pu['created']}</td>
+                        <td><span class="badge-warning">Pending Approval</span></td>
+                        <td>
+                            <div style="display: flex; gap: 6px;">
+                                <form method="POST" action="/api/approve_user" style="display: inline;">
+                                    <input type="hidden" name="user_id" value="{pu['id']}">
+                                    <button type="submit" class="btn btn-primary btn-sm">✅ Approve</button>
+                                </form>
+                                <form method="POST" action="/api/reject_user" style="display: inline;">
+                                    <input type="hidden" name="user_id" value="{pu['id']}">
+                                    <button type="submit" class="btn btn-danger btn-sm">❌ Reject</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    """)
+                content_parts.append(f"""
+                <div class="card" style="border: 2px solid var(--warning);">
+                    <div class="card-header">
+                        <h2>📥 Pending Roommate Registrations ({len(pending_users)})</h2>
+                    </div>
+                    <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 12px;">
+                        The following people signed up. Click <strong>Approve</strong> to activate their account and allow them to log in:
+                    </p>
+                    <div style="overflow-x: auto;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Username</th>
+                                    <th>Phone</th>
+                                    <th>Applied On</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {''.join(pending_rows)}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                """)
+
+        # ==============================================================
+        # 3. KHAATA TABLE
+        # ADMIN sees all roommates.
+        # MEMBER sees ONLY their personal hisab kitab (others are completely hidden).
+        # ==============================================================
+        if is_admin:
+            member_rows = []
+            for m in all_member_balances:
+                b = m["net_balance"]
+                if b > Decimal("0.00"):
+                    badge = f'<span class="badge-credit">+Rs. {b:,.2f} (Credit)</span>'
+                elif b < Decimal("0.00"):
+                    badge = f'<span class="badge-dues">-Rs. {abs(b):,.2f} (Dues)</span>'
+                else:
+                    badge = '<span class="badge-settled">Rs. 0.00 (Clear)</span>'
+
+                member_rows.append(f"""
+                <tr>
+                    <td><strong>{m['display_name']}</strong></td>
+                    <td><code>{m['username']}</code></td>
+                    <td>{m['phone_number'] or '-'}</td>
+                    <td>Rs. {m['total_deposits']:,.2f}</td>
+                    <td>Rs. {m['total_meal_charges']:,.2f}</td>
+                    <td>Rs. {m['total_shared_charges']:,.2f}</td>
+                    <td>{badge}</td>
+                </tr>
+                """)
+
+            content_parts.append(f"""
+            <div class="card">
+                <div class="card-header">
+                    <h2>👥 Roommates Master Khaata (Admin View)</h2>
+                    <div style="display: flex; gap: 8px;">
+                        <a href="/export/balances.csv" class="btn btn-secondary">📥 Export Balances (CSV)</a>
+                        <a href="{wa_url}" target="_blank" class="btn btn-whatsapp">📲 WhatsApp Update</a>
+                    </div>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Roommate</th>
+                                <th>Username</th>
+                                <th>Phone</th>
+                                <th>Total Paid</th>
+                                <th>Meals Cost</th>
+                                <th>Shared Cost</th>
+                                <th>Net Balance</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {''.join(member_rows)}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            """)
+        else:
+            # MEMBER PERSONAL HISAB KITAB ONLY:
+            meal_rows = []
+            for mm in my_meals_data:
+                meal_rows.append(f"""
+                <tr>
+                    <td>{mm['date']}</td>
+                    <td><strong>{mm['meal_type']}</strong></td>
+                    <td>{mm['title']}</td>
+                    <td style="color: var(--danger); font-weight: 600;">-Rs. {mm['charged']:,.2f}</td>
+                </tr>
+                """)
+
+            dep_rows = []
+            for md in my_deposits_data:
+                dep_rows.append(f"""
+                <tr>
+                    <td>{md['date']}</td>
+                    <td style="color: var(--success); font-weight: 600;">+Rs. {md['amount']:,.2f}</td>
+                    <td>{md['method']}</td>
+                    <td>{md['status']}</td>
+                    <td>{md['notes']}</td>
+                </tr>
+                """)
+
+            content_parts.append(f"""
+            <div class="card">
+                <div class="card-header">
+                    <h2>📖 My Personal Meals & Consumption Ledger</h2>
+                    <span style="font-size: 0.85rem; color: var(--text-muted); font-style: italic;">
+                        🔒 Private to {user['display_name']}
+                    </span>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Meal Type</th>
+                                <th>Dish / Description</th>
+                                <th>My Charged Share</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {''.join(meal_rows) if meal_rows else '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No meals recorded for you yet.</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2>💵 My Payment & Deposit History</h2>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Amount Deposited</th>
+                                <th>Method</th>
+                                <th>Verification Status</th>
+                                <th>Note / Ref</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {''.join(dep_rows) if dep_rows else '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No deposits recorded yet.</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2>🔒 Password & Account Settings</h2>
+                </div>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">
+                    Password resets are managed securely by <strong>Administrator Huzaifa</strong>. If you forgot or need to reset your password, please contact Huzaifa directly.
+                </p>
+            </div>
+            """)
+
+        # ==============================================================
+        # 4. ADMIN ACTIONS (RECORD MEAL, RECORD DEPOSIT, EDIT MEMBER INFO, RESET PASSWORDS)
+        # ==============================================================
+        if is_admin:
+            # Meal Form
             att_checkboxes = []
             for u in all_users_data:
                 att_checkboxes.append(f"""
@@ -395,7 +666,7 @@ class MessMateHandler(BaseHTTPRequestHandler):
                 </label>
                 """)
 
-            meal_form_html = f"""
+            content_parts.append(f"""
             <div class="card">
                 <div class="card-header">
                     <h2>🍽️ Record Meal Expense & Split with Attendees</h2>
@@ -437,83 +708,112 @@ class MessMateHandler(BaseHTTPRequestHandler):
                     </button>
                 </form>
             </div>
-            """
+            """)
 
-        # Deposit Form
-        user_options = "".join([f'<option value="{u["id"]}">{u["display_name"]} ({u["username"]})</option>' for u in all_users_data])
-        deposit_form_html = f"""
-        <div class="card">
-            <div class="card-header">
-                <h2>💰 Record Advance Pool Deposit</h2>
-            </div>
-            <form method="POST" action="/api/add_deposit">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label>Member</label>
-                        <select name="user_id">
-                            {user_options}
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Deposit Amount (PKR / Rs.)</label>
-                        <input type="number" step="100" name="amount" placeholder="e.g. 3000" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Payment Method</label>
-                        <select name="payment_method">
-                            <option value="Cash">Cash</option>
-                            <option value="EasyPaisa">EasyPaisa</option>
-                            <option value="JazzCash">JazzCash</option>
-                            <option value="NayaPay">NayaPay</option>
-                            <option value="SadaPay">SadaPay</option>
-                            <option value="Bank Transfer">Bank Transfer</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Reference / Note</label>
-                        <input type="text" name="notes" placeholder="e.g. Paid in cash to Huzaifa">
-                    </div>
-                </div>
-                <button type="submit" class="btn btn-primary">💾 Confirm Deposit</button>
-            </form>
-        </div>
-        """
-
-        # Today's Meals List
-        today_meals_html = ""
-        if today_meals_data:
-            tm_items = []
-            for tm in today_meals_data:
-                presents = tm["presents"]
-                tm_items.append(f"""
-                <div style="padding: 12px 14px; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 10px;">
-                    <div style="display: flex; justify-content: space-between; font-weight: 600;">
-                        <span>{tm['meal_type'].upper()}: {tm['title']}</span>
-                        <span>Rs. {tm['total_cost']:,.2f}</span>
-                    </div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
-                        👥 {len(presents)} Present ({', '.join(presents)}) • 💵 Per Head: Rs. {tm['per_head_cost']:,.2f}
-                    </div>
-                </div>
-                """)
-            today_meals_html = f"""
+            # Deposit Form
+            user_options = "".join([f'<option value="{u["id"]}">{u["display_name"]} ({u["username"]})</option>' for u in all_users_data])
+            content_parts.append(f"""
             <div class="card">
                 <div class="card-header">
-                    <h2>🍽️ Today's Recorded Meals</h2>
+                    <h2>💰 Record Advance Pool Deposit</h2>
                 </div>
-                {''.join(tm_items)}
+                <form method="POST" action="/api/add_deposit">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Member</label>
+                            <select name="user_id">
+                                {user_options}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Deposit Amount (PKR / Rs.)</label>
+                            <input type="number" step="100" name="amount" placeholder="e.g. 3000" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Payment Method</label>
+                            <select name="payment_method">
+                                <option value="Cash">Cash</option>
+                                <option value="EasyPaisa">EasyPaisa</option>
+                                <option value="JazzCash">JazzCash</option>
+                                <option value="NayaPay">NayaPay</option>
+                                <option value="SadaPay">SadaPay</option>
+                                <option value="Bank Transfer">Bank Transfer</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Reference / Note</label>
+                            <input type="text" name="notes" placeholder="e.g. Paid in cash to Huzaifa">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">💾 Confirm Deposit</button>
+                </form>
             </div>
-            """
+            """)
 
-        content = f"""
-        {metrics_html}
-        {members_table_html}
-        {today_meals_html}
-        {meal_form_html}
-        {deposit_form_html}
-        """
+            # EDIT ANY INFORMATION & RESET PASSWORD (ADMIN CONTROL PANEL)
+            member_edit_options = "".join([f'<option value="{u["id"]}">{u["display_name"]} (@{u["username"]})</option>' for u in all_registered_data])
+            content_parts.append(f"""
+            <div class="card" style="border-top: 4px solid var(--primary-dark);">
+                <div class="card-header">
+                    <h2>⚙️ Admin Control Panel: Edit Member Information & Reset Passwords</h2>
+                </div>
+                <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 16px;">
+                    As administrator, you can edit any member's details or reset their password if they forgot it:
+                </p>
 
-        html = HTML_TEMPLATE.replace("{NAVBAR}", navbar).replace("{MESSAGE}", msg_html).replace("{CONTENT}", content)
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
+                    <!-- Edit Member Info Form -->
+                    <div style="padding: 16px; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px;">
+                        <h3 style="font-size: 1rem; margin-bottom: 12px; color: var(--text-dark);">✏️ Edit Member Profile</h3>
+                        <form method="POST" action="/api/edit_member">
+                            <div class="form-group" style="margin-bottom: 10px;">
+                                <label>Select Roommate</label>
+                                <select name="target_user_id" required>
+                                    {member_edit_options}
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 10px;">
+                                <label>New Full Name</label>
+                                <input type="text" name="new_display_name" placeholder="Leave blank to keep unchanged">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 10px;">
+                                <label>New Phone Number</label>
+                                <input type="text" name="new_phone" placeholder="Leave blank to keep unchanged">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 14px;">
+                                <label>Account Status</label>
+                                <select name="new_status">
+                                    <option value="keep">Keep Current Status</option>
+                                    <option value="active">Active</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-secondary btn-sm" style="width: 100%;">Update Member Details</button>
+                        </form>
+                    </div>
+
+                    <!-- Reset Password Form -->
+                    <div style="padding: 16px; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px;">
+                        <h3 style="font-size: 1rem; margin-bottom: 12px; color: var(--text-dark);">🔑 Admin Password Reset</h3>
+                        <form method="POST" action="/api/admin_reset_password">
+                            <div class="form-group" style="margin-bottom: 10px;">
+                                <label>Select Member</label>
+                                <select name="target_user_id" required>
+                                    {member_edit_options}
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 14px;">
+                                <label>New Password (At least 6 characters)</label>
+                                <input type="password" name="new_password" placeholder="Enter new password" required minlength="6">
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm" style="width: 100%;">Set New Password</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            """)
+
+        html = HTML_TEMPLATE.replace("{NAVBAR}", navbar).replace("{MESSAGE}", msg_html).replace("{CONTENT}", "".join(content_parts))
         self.send_html(html)
 
     def do_POST(self):
@@ -524,7 +824,7 @@ class MessMateHandler(BaseHTTPRequestHandler):
         post_data = self.rfile.read(content_length).decode("utf-8")
         params = urllib.parse.parse_qs(post_data)
 
-        # Login endpoint
+        # 1. Login endpoint
         if path == "/api/login":
             username = params.get("username", [""])[0].strip()
             password = params.get("password", [""])[0]
@@ -545,12 +845,103 @@ class MessMateHandler(BaseHTTPRequestHandler):
                     self.send_redirect(f"/login?err={urllib.parse.quote(err or 'Invalid credentials')}")
                     return
 
+        # 2. Public Self-Registration endpoint
+        if path == "/api/register":
+            username = params.get("username", [""])[0].strip()
+            display_name = params.get("display_name", [""])[0].strip()
+            phone = params.get("phone_number", [""])[0].strip()
+            password = params.get("password", [""])[0]
+
+            with get_db() as session:
+                new_u, err = register_user(session, username, password, display_name, phone)
+                if new_u:
+                    msg = f"Thank you, {display_name}! Your registration was submitted. Please wait for Administrator Huzaifa to approve and activate your account."
+                    self.send_redirect(f"/login?msg={urllib.parse.quote(msg)}")
+                else:
+                    self.send_redirect(f"/login?tab=signup&err={urllib.parse.quote(err or 'Registration failed')}")
+            return
+
+        # Protected endpoints require valid session
         user = self.get_current_user()
         if not user:
             self.send_redirect("/login")
             return
 
-        # Add Meal endpoint
+        # 3. Approve User Registration (Admin only)
+        if path == "/api/approve_user":
+            if user["role"] != "admin":
+                self.send_redirect("/?err=Only admin can approve registrations.")
+                return
+            target_id = int(params.get("user_id", ["0"])[0])
+            with get_db() as session:
+                ok, msg = approve_user_registration(session, target_id, user["id"])
+                if ok:
+                    self.send_redirect(f"/?msg={urllib.parse.quote(msg)}")
+                else:
+                    self.send_redirect(f"/?err={urllib.parse.quote(msg)}")
+            return
+
+        # 4. Reject User Registration (Admin only)
+        if path == "/api/reject_user":
+            if user["role"] != "admin":
+                self.send_redirect("/?err=Only admin can reject registrations.")
+                return
+            target_id = int(params.get("user_id", ["0"])[0])
+            with get_db() as session:
+                ok, msg = reject_user_registration(session, target_id, user["id"])
+                if ok:
+                    self.send_redirect(f"/?msg={urllib.parse.quote(msg)}")
+                else:
+                    self.send_redirect(f"/?err={urllib.parse.quote(msg)}")
+            return
+
+        # 5. Edit Member Information (Admin only)
+        if path == "/api/edit_member":
+            if user["role"] != "admin":
+                self.send_redirect("/?err=Only admin can edit members.")
+                return
+            target_id = int(params.get("target_user_id", ["0"])[0])
+            new_name = params.get("new_display_name", [""])[0].strip()
+            new_phone = params.get("new_phone", [""])[0].strip()
+            new_status = params.get("new_status", ["keep"])[0]
+
+            with get_db() as session:
+                target_u = session.query(User).filter(User.id == target_id).first()
+                if not target_u:
+                    self.send_redirect("/?err=User not found.")
+                    return
+                if new_name:
+                    target_u.display_name = new_name
+                if new_phone:
+                    target_u.phone_number = new_phone
+                if new_status == "active":
+                    target_u.is_active = True
+                elif new_status == "inactive":
+                    target_u.is_active = False
+                session.commit()
+                self.send_redirect(f"/?msg=Updated details for {target_u.display_name}!")
+            return
+
+        # 6. Admin Password Reset (Admin only)
+        if path == "/api/admin_reset_password":
+            if user["role"] != "admin":
+                self.send_redirect("/?err=Only admin can reset passwords.")
+                return
+            target_id = int(params.get("target_user_id", ["0"])[0])
+            new_pass = params.get("new_password", [""])[0]
+            with get_db() as session:
+                target_u = session.query(User).filter(User.id == target_id).first()
+                if not target_u:
+                    self.send_redirect("/?err=User not found.")
+                    return
+                ok, msg = admin_reset_password(session, target_u, new_pass)
+                if ok:
+                    self.send_redirect(f"/?msg={urllib.parse.quote(msg)}")
+                else:
+                    self.send_redirect(f"/?err={urllib.parse.quote(msg)}")
+            return
+
+        # 7. Add Meal (Admin only)
         if path == "/api/add_meal":
             if user["role"] != "admin":
                 self.send_redirect("/?err=Only admin can record meals.")
@@ -590,8 +981,12 @@ class MessMateHandler(BaseHTTPRequestHandler):
                 self.send_redirect(f"/?err={urllib.parse.quote(str(e))}")
             return
 
-        # Add Deposit endpoint
+        # 8. Add Deposit (Admin only)
         if path == "/api/add_deposit":
+            if user["role"] != "admin":
+                self.send_redirect("/?err=Only admin can record deposits directly.")
+                return
+
             try:
                 target_user_id = int(params.get("user_id", ["0"])[0])
                 amount = Decimal(params.get("amount", ["0"])[0])

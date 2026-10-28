@@ -21,6 +21,7 @@ class User(Base):
     display_name = Column(String(100), nullable=False)
     phone_number = Column(String(30), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    approval_status = Column(String(20), default="approved", nullable=False)  # "approved", "pending", "rejected"
     created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 

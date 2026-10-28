@@ -30,7 +30,10 @@ from messmate.seed import seed_initial_eight_members, seed_sample_demo_data
 from messmate.services.auth import (
     authenticate_user,
     change_password,
-    admin_reset_password
+    admin_reset_password,
+    register_user,
+    approve_user_registration,
+    reject_user_registration
 )
 from messmate.services.finance import (
     to_decimal,
@@ -179,7 +182,7 @@ def render_login_view():
     </div>
     """, unsafe_allow_html=True)
 
-    tab_login, tab_demo = st.tabs(["🔑 Log In", "ℹ️ Demo Accounts & First-Run Setup"])
+    tab_login, tab_signup, tab_demo = st.tabs(["🔑 Log In", "📝 Sign Up (New Roommate)", "ℹ️ Demo Accounts & Help"])
 
     with tab_login:
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -206,6 +209,31 @@ def render_login_view():
                                 }
                                 st.success(f"Welcome back, {user.display_name}!")
                                 st.rerun()
+                            else:
+                                st.error(err)
+
+    with tab_signup:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.subheader("New Roommate Registration")
+            st.info("📢 **Note:** Once you register, **Administrator Huzaifa** must approve your account before you can log in.")
+            with st.form("signup_form"):
+                new_name = st.text_input("Full Name", placeholder="e.g. Ali Raza")
+                new_user = st.text_input("Desired Username", placeholder="e.g. ali").strip().lower()
+                new_phone = st.text_input("Phone Number (WhatsApp)", placeholder="e.g. 03001234567")
+                new_pass = st.text_input("Create Password", type="password")
+                signup_btn = st.form_submit_button("Submit Registration 📝", use_container_width=True)
+
+                if signup_btn:
+                    if not new_name or not new_user or not new_pass:
+                        st.error("Please fill in Name, Username, and Password.")
+                    elif len(new_pass) < 6:
+                        st.error("Password must be at least 6 characters long.")
+                    else:
+                        with get_db() as session:
+                            u_reg, err = register_user(session, new_user, new_pass, new_name, new_phone)
+                            if u_reg:
+                                st.success(f"Registration submitted! Please wait for Administrator Huzaifa to approve and activate your account.")
                             else:
                                 st.error(err)
 
@@ -263,103 +291,198 @@ def render_app_header(current_user):
 # 1. MESS DASHBOARD
 # ==========================================
 def view_dashboard(current_user):
-    st.subheader("📊 Mess Overview & Khaata Summary")
+    is_admin = current_user["role"] == "admin"
+    st.subheader("📊 " + ("Mess Master Overview & Khaata" if is_admin else "My Personal Khaata & Mess Pool Status"))
     
     with get_db() as session:
         summary = get_mess_overall_summary(session)
-        members = calculate_all_balances(session, include_inactive=False)
+        my_bal = calculate_member_balance(session, current_user["id"])
+        
+        # Pending registrations for admin
+        pending_users = []
+        if is_admin:
+            pending_users = session.query(User).filter(User.approval_status == "pending").all()
+
+        members = calculate_all_balances(session, include_inactive=False) if is_admin else []
         today_meals = session.query(Meal).filter(Meal.date == date.today(), Meal.is_reversed == False).all()
+
+        # Personal member hisab kitab
+        my_meals = session.query(MealAttendance, Meal).join(Meal, Meal.id == MealAttendance.meal_id).filter(
+            MealAttendance.user_id == current_user["id"],
+            MealAttendance.is_present == True,
+            Meal.is_reversed == False
+        ).order_by(Meal.date.desc(), Meal.id.desc()).all()
+
+        my_deposits = session.query(Deposit).filter(
+            Deposit.user_id == current_user["id"]
+        ).order_by(Deposit.date.desc(), Deposit.id.desc()).all()
 
     # Metric Row
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         cash = summary["cash_in_hand"]
         st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-title">Mess Pool (Cash in Hand)</div>
+        <div class="metric-card" style="border-left: 4px solid var(--primary);">
+            <div class="metric-title">🏦 Total Mess Pool (Money Remaining)</div>
             <div class="metric-value">{CURRENCY_SYMBOL} {cash:,.2f}</div>
-            <div class="metric-sub">Net available mess fund</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c2:
-        spent = summary["total_spent"]
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-title">Total Mess Expenses</div>
-            <div class="metric-value">{CURRENCY_SYMBOL} {spent:,.2f}</div>
-            <div class="metric-sub">Meals + Shared kitchen items</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c3:
-        dues = summary["total_dues"]
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-title">Total Outstanding Dues</div>
-            <div class="metric-value" style="color: #dc2626;">{CURRENCY_SYMBOL} {dues:,.2f}</div>
-            <div class="metric-sub">Unpaid balances across members</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c4:
-        active_count = summary["active_member_count"]
-        st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-title">Active Roommates</div>
-            <div class="metric-value">{active_count} Friends</div>
-            <div class="metric-sub">Accounting Status: {"✅ Healthy" if summary['is_balanced'] else "⚠️ Alert"}</div>
+            <div class="metric-sub">Net available communal mess fund</div>
         </div>
         """, unsafe_allow_html=True)
 
-    # Member Balances Table
-    st.markdown("#### 👥 Roommate Accounts & Balances")
-    table_data = []
-    for m in members:
-        bal = m["net_balance"]
-        if bal > Decimal("0.00"):
-            status_display = f"🟢 +{CURRENCY_SYMBOL} {bal:,.2f} (Credit)"
-        elif bal < Decimal("0.00"):
-            status_display = f"🔴 -{CURRENCY_SYMBOL} {abs(bal):,.2f} (Dues)"
+    if is_admin:
+        with c2:
+            spent = summary["total_spent"]
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Total Mess Expenses</div>
+                <div class="metric-value">{CURRENCY_SYMBOL} {spent:,.2f}</div>
+                <div class="metric-sub">Meals + Shared items</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c3:
+            dues = summary["total_dues"]
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Total Roommate Dues</div>
+                <div class="metric-value" style="color: #dc2626;">{CURRENCY_SYMBOL} {dues:,.2f}</div>
+                <div class="metric-sub">Unpaid balances across members</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c4:
+            active_count = summary["active_member_count"]
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Active Roommates</div>
+                <div class="metric-value">{active_count} Friends</div>
+                <div class="metric-sub">Admin: <strong>Huzaifa</strong></div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        # Member's own hisab kitab metrics
+        with c2:
+            my_net = my_bal["net_balance"]
+            color = "#166534" if my_net >= 0 else "#dc2626"
+            st.markdown(f"""
+            <div class="metric-card" style="border-left: 4px solid {color};">
+                <div class="metric-title">👤 My Net Balance</div>
+                <div class="metric-value" style="color: {color};">
+                    {'+' if my_net >= 0 else ''}{CURRENCY_SYMBOL} {my_net:,.2f}
+                </div>
+                <div class="metric-sub">{'🟢 Advance credit available' if my_net >= 0 else '🔴 Outstanding dues pending'}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c3:
+            my_paid = my_bal["total_deposits"]
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">💵 My Total Paid (Deposits)</div>
+                <div class="metric-value">{CURRENCY_SYMBOL} {my_paid:,.2f}</div>
+                <div class="metric-sub">Total cash/digital money you deposited</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c4:
+            my_consumed = my_bal["total_consumed"]
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">🍲 My Total Consumed</div>
+                <div class="metric-value">{CURRENCY_SYMBOL} {my_consumed:,.2f}</div>
+                <div class="metric-sub">Meals and shared items charged to you</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Admin: Show Pending Registrations Alert
+    if is_admin and pending_users:
+        st.warning(f"⚠️ **{len(pending_users)} pending roommate registration(s)** awaiting your approval! Go to **Roommates Directory -> Pending Registrations** to approve them.")
+
+    # Content Display
+    if is_admin:
+        # Member Balances Table (Admin only)
+        st.markdown("#### 👥 Roommate Accounts & Balances (Admin View)")
+        table_data = []
+        for m in members:
+            bal = m["net_balance"]
+            if bal > Decimal("0.00"):
+                status_display = f"🟢 +{CURRENCY_SYMBOL} {bal:,.2f} (Credit)"
+            elif bal < Decimal("0.00"):
+                status_display = f"🔴 -{CURRENCY_SYMBOL} {abs(bal):,.2f} (Dues)"
+            else:
+                status_display = f"⚪ {CURRENCY_SYMBOL} 0.00 (Clear)"
+
+            table_data.append({
+                "Member": m["display_name"],
+                "Username": m["username"],
+                "Phone": m["phone_number"] or "-",
+                "Total Paid": f"{CURRENCY_SYMBOL} {m['total_deposits']:,.2f}",
+                "Meals Consumed": f"{CURRENCY_SYMBOL} {m['total_meal_charges']:,.2f}",
+                "Shared Consumed": f"{CURRENCY_SYMBOL} {m['total_shared_charges']:,.2f}",
+                "Net Balance": status_display
+            })
+
+        render_dataframe(table_data)
+
+        # Today's Meals Section & WhatsApp (Admin)
+        col_tm1, col_tm2 = st.columns([2, 1])
+        with col_tm1:
+            st.markdown("#### 🍽️ Today's Recorded Meals")
+            if not today_meals:
+                st.info("No meals recorded for today yet. Use the **Daily Meals & Attendance** tab to enter breakfast, lunch, or dinner.")
+            else:
+                for tm in today_meals:
+                    presents = [a.user.display_name for a in tm.attendances if a.is_present]
+                    with st.expander(f"**{tm.meal_type.upper()}**: {tm.title} — {CURRENCY_SYMBOL} {tm.total_cost:,.2f} (Rs. {tm.per_head_cost:,.2f} / person)", expanded=True):
+                        st.write(f"**Category:** {tm.category} | **Attendees ({len(presents)}):** {', '.join(presents)}")
+                        if tm.notes:
+                            st.caption(f"Notes: {tm.notes}")
+
+        with col_tm2:
+            st.markdown("#### 📢 Quick WhatsApp Update")
+            with get_db() as session:
+                daily_report_txt = generate_daily_whatsapp_report(session, date.today())
+            wa_url = get_whatsapp_share_url(daily_report_txt)
+            st.markdown(f"""
+            Share today's meals and Khaata balances directly to the hostel WhatsApp group with one click:
+            
+            <a href="{wa_url}" target="_blank" style="text-decoration:none;">
+                <button style="width:100%; padding:10px 14px; background-color:#25D366; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">
+                    📲 Share Daily Update on WhatsApp
+                </button>
+            </a>
+            """, unsafe_allow_html=True)
+    else:
+        # MEMBER PERSONAL HISAB KITAB (Other roommates' data is completely hidden)
+        st.markdown("#### 📖 My Personal Attended Meals Ledger")
+        st.caption("🔒 *Private to you. Other roommates' financial details are hidden.*")
+
+        my_meals_rows = []
+        for att, m in my_meals:
+            my_meals_rows.append({
+                "Date": m.date.strftime("%Y-%m-%d"),
+                "Meal": m.meal_type.capitalize(),
+                "Dish / Title": m.title or m.category,
+                "My Charged Amount": f"{CURRENCY_SYMBOL} {att.charged_amount:,.2f}"
+            })
+
+        if my_meals_rows:
+            render_dataframe(my_meals_rows)
         else:
-            status_display = f"⚪ {CURRENCY_SYMBOL} 0.00 (Clear)"
+            st.info("No meals recorded for you yet.")
 
-        table_data.append({
-            "Member": m["display_name"],
-            "Username": m["username"],
-            "Phone": m["phone_number"] or "-",
-            "Total Paid": f"{CURRENCY_SYMBOL} {m['total_deposits']:,.2f}",
-            "Meals Consumed": f"{CURRENCY_SYMBOL} {m['total_meal_charges']:,.2f}",
-            "Shared Consumed": f"{CURRENCY_SYMBOL} {m['total_shared_charges']:,.2f}",
-            "Net Balance": status_display
-        })
+        st.markdown("#### 💵 My Payments & Deposits Ledger")
+        my_dep_rows = []
+        for d in my_deposits:
+            status_badge = "❌ Reversed" if d.is_reversed else ("⏳ Pending Approval" if d.status == "pending_approval" else "✅ Confirmed")
+            my_dep_rows.append({
+                "Date": d.date.strftime("%Y-%m-%d"),
+                "Amount Paid": f"{CURRENCY_SYMBOL} {d.amount:,.2f}",
+                "Payment Method": d.payment_method,
+                "Status": status_badge,
+                "Reference / Notes": d.notes or "-"
+            })
 
-    render_dataframe(table_data)
-
-    # Today's Meals Section
-    col_tm1, col_tm2 = st.columns([2, 1])
-    with col_tm1:
-        st.markdown("#### 🍽️ Today's Recorded Meals")
-        if not today_meals:
-            st.info("No meals recorded for today yet. Use the **Daily Meals & Attendance** tab to enter breakfast, lunch, or dinner.")
+        if my_dep_rows:
+            render_dataframe(my_dep_rows)
         else:
-            for tm in today_meals:
-                presents = [a.user.display_name for a in tm.attendances if a.is_present]
-                with st.expander(f"**{tm.meal_type.upper()}**: {tm.title} — {CURRENCY_SYMBOL} {tm.total_cost:,.2f} (Rs. {tm.per_head_cost:,.2f} / person)", expanded=True):
-                    st.write(f"**Category:** {tm.category} | **Attendees ({len(presents)}):** {', '.join(presents)}")
-                    if tm.notes:
-                        st.caption(f"Notes: {tm.notes}")
-
-    with col_tm2:
-        st.markdown("#### 📢 Quick WhatsApp Update")
-        with get_db() as session:
-            daily_report_txt = generate_daily_whatsapp_report(session, date.today())
-        wa_url = get_whatsapp_share_url(daily_report_txt)
-        st.markdown(f"""
-        Share today's meals and Khaata balances directly to the hostel WhatsApp group with one click:
-        
-        <a href="{wa_url}" target="_blank" style="text-decoration:none;">
-            <button style="width:100%; padding:10px 14px; background-color:#25D366; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">
-                📲 Share Daily Update on WhatsApp
-            </button>
-        </a>
+            st.info("No deposits recorded for you yet.")
         """, unsafe_allow_html=True)
 
 
@@ -797,23 +920,52 @@ def view_members(current_user):
         all_members = session.query(User).order_by(User.id).all()
         member_balances = {m["user_id"]: m for m in calculate_all_balances(session, include_inactive=True)}
 
-    tab_dir, tab_edit, tab_add = st.tabs(["📋 Directory", "✏️ Update Member Info", "➕ Add New Roommate"])
+    tab_dir, tab_pending, tab_edit, tab_add = st.tabs(["📋 Directory", "📥 Pending Approvals", "✏️ Update Member Info & Password", "➕ Register Member Directly"])
 
     with tab_dir:
         rows = []
         for u in all_members:
             b = member_balances.get(u.id, {})
             net = b.get("net_balance", Decimal("0.00"))
+            status_tag = "🟢 Active" if u.is_active else ("🟡 Pending Approval" if getattr(u, 'approval_status', 'approved') == 'pending' else "🔴 Inactive")
             rows.append({
                 "ID": u.id,
                 "Name": u.display_name,
                 "Username": u.username,
                 "Role": u.role.upper(),
                 "Phone": u.phone_number or "-",
-                "Status": "🟢 Active" if u.is_active else "🔴 Inactive",
+                "Status": status_tag,
                 "Net Balance": f"{CURRENCY_SYMBOL} {net:,.2f}"
             })
         render_dataframe(rows)
+
+    with tab_pending:
+        if current_user["role"] != "admin":
+            st.info("Pending registrations can only be approved by Administrator Huzaifa.")
+        else:
+            st.markdown("##### New Roommate Sign-Up Requests Awaiting Activation")
+            with get_db() as session:
+                pending_regs = session.query(User).filter(User.approval_status == "pending").all()
+
+            if not pending_regs:
+                st.success("No pending roommate registrations. All clear!")
+            else:
+                for pu in pending_regs:
+                    with st.expander(f"👤 **{pu.display_name}** (`@{pu.username}`) • Phone: {pu.phone_number or 'None'}", expanded=True):
+                        st.write(f"**Applied on:** {pu.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+                        c_app, c_rej = st.columns(2)
+                        with c_app:
+                            if st.button(f"✅ Approve & Activate {pu.display_name}", key=f"btn_app_{pu.id}", type="primary"):
+                                with get_db() as session:
+                                    ok, msg = approve_user_registration(session, pu.id, current_user["id"])
+                                    st.success(msg)
+                                    st.rerun()
+                        with c_rej:
+                            if st.button(f"❌ Reject Registration", key=f"btn_rej_{pu.id}"):
+                                with get_db() as session:
+                                    ok, msg = reject_user_registration(session, pu.id, current_user["id"])
+                                    st.warning(msg)
+                                    st.rerun()
 
     with tab_edit:
         if current_user["role"] != "admin":
@@ -1043,7 +1195,7 @@ def view_disputes(current_user):
 # 9. PROFILE & SETTINGS
 # ==========================================
 def view_profile(current_user):
-    st.subheader("🔒 My Profile & Security")
+    st.subheader("🔒 Profile & Security")
 
     col_p1, col_p2 = st.columns(2)
     with col_p1:
@@ -1054,22 +1206,26 @@ def view_profile(current_user):
         st.write(f"**Phone Number:** {current_user['phone_number'] or 'Not provided'}")
 
     with col_p2:
-        st.markdown("##### Change Password")
-        old_p = st.text_input("Current Password", type="password")
-        new_p = st.text_input("New Password", type="password")
-        confirm_p = st.text_input("Confirm New Password", type="password")
+        if current_user["role"] == "admin":
+            st.markdown("##### Change Administrator Password")
+            old_p = st.text_input("Current Password", type="password")
+            new_p = st.text_input("New Password", type="password")
+            confirm_p = st.text_input("Confirm New Password", type="password")
 
-        if st.button("Update Password"):
-            if new_p != confirm_p:
-                st.error("New passwords do not match.")
-            else:
-                with get_db() as session:
-                    u = session.query(User).filter(User.id == current_user["id"]).first()
-                    ok, msg = change_password(session, u, old_p, new_p)
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
+            if st.button("Update Admin Password"):
+                if new_p != confirm_p:
+                    st.error("New passwords do not match.")
+                else:
+                    with get_db() as session:
+                        u = session.query(User).filter(User.id == current_user["id"]).first()
+                        ok, msg = change_password(session, u, old_p, new_p)
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+        else:
+            st.markdown("##### Password Management")
+            st.info("🔒 **Security Policy:** Member password resets and updates are managed exclusively by **Administrator Huzaifa**. If you forgot your password or need a reset, please contact Huzaifa directly.")
 
 
 # ==========================================
@@ -1081,45 +1237,54 @@ def main():
         return
 
     render_app_header(st.session_state.user)
+    is_admin = st.session_state.user["role"] == "admin"
 
-    # Sidebar Navigation
+    # Sidebar Navigation tailored to Role
     with st.sidebar:
         st.markdown(f"### 🧭 Navigation")
         
-        menu_options = [
-            "📊 Dashboard",
-            "🍽️ Daily Meals & Attendance",
-            "🛒 Shared Kharcha",
-            "💰 Deposits & Khaata",
-            "📢 WhatsApp Reports",
-            "👥 Roommates Directory",
-            "📑 Financial Statements & Audit",
-            "🙋 Disputes & Requests",
-            "🔒 My Profile"
-        ]
+        if is_admin:
+            menu_options = [
+                "📊 Master Dashboard",
+                "🍽️ Daily Meals & Attendance",
+                "🛒 Shared Kharcha",
+                "💰 Deposits & Khaata",
+                "📢 WhatsApp Reports",
+                "👥 Roommates Directory & Approvals",
+                "📑 Financial Statements & Audit",
+                "🙋 Disputes & Requests",
+                "🔒 Admin Profile"
+            ]
+        else:
+            menu_options = [
+                "📊 My Personal Khaata",
+                "💰 My Deposits & Pay Advance",
+                "🙋 Submit Query / Dispute",
+                "🔒 Account Info"
+            ]
         
         choice = st.radio("Go to:", menu_options, label_visibility="collapsed")
         st.divider()
-        st.caption("MessMate v1.0 • Built for Hostel Friends")
+        st.caption(f"MessMate v1.0 • {'👑 Administrator Huzaifa' if is_admin else '👤 Roommate Portal'}")
 
     # Route page
-    if choice == "📊 Dashboard":
+    if choice in ["📊 Master Dashboard", "📊 My Personal Khaata"]:
         view_dashboard(st.session_state.user)
     elif choice == "🍽️ Daily Meals & Attendance":
         view_meals(st.session_state.user)
     elif choice == "🛒 Shared Kharcha":
         view_shared_expenses(st.session_state.user)
-    elif choice == "💰 Deposits & Khaata":
+    elif choice in ["💰 Deposits & Khaata", "💰 My Deposits & Pay Advance"]:
         view_deposits(st.session_state.user)
     elif choice == "📢 WhatsApp Reports":
         view_whatsapp(st.session_state.user)
-    elif choice == "👥 Roommates Directory":
+    elif choice == "👥 Roommates Directory & Approvals":
         view_members(st.session_state.user)
     elif choice == "📑 Financial Statements & Audit":
         view_ledger_and_audit(st.session_state.user)
-    elif choice == "🙋 Disputes & Requests":
+    elif choice in ["🙋 Disputes & Requests", "🙋 Submit Query / Dispute"]:
         view_disputes(st.session_state.user)
-    elif choice == "🔒 My Profile":
+    elif choice in ["🔒 Admin Profile", "🔒 Account Info"]:
         view_profile(st.session_state.user)
 
 

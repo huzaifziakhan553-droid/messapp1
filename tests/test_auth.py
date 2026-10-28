@@ -10,6 +10,9 @@ from messmate.services.auth import (
     authenticate_user,
     record_failed_attempt,
     reset_failed_attempts,
+    register_user,
+    approve_user_registration,
+    reject_user_registration,
     LOGIN_ATTEMPTS,
     MAX_FAILED_ATTEMPTS
 )
@@ -81,7 +84,37 @@ def test_inactive_user_blocked(auth_session):
 
     auth_user, err = authenticate_user(auth_session, "inactive_friend", "MyPass123")
     assert auth_user is None
-    assert "deactivated" in err.lower()
+    assert "inactive" in err.lower()
+
+
+def test_registration_and_approval_workflow(auth_session):
+    # 1. Register a new user
+    new_u, err = register_user(
+        session=auth_session,
+        username="newroommate",
+        password="SecretPassword123",
+        display_name="New Roommate",
+        phone_number="03001122334"
+    )
+    assert err is None
+    assert new_u.approval_status == "pending"
+    assert new_u.is_active is False
+
+    # 2. Login before approval should fail
+    user, err = authenticate_user(auth_session, "newroommate", "SecretPassword123")
+    assert user is None
+    assert "pending approval" in err.lower()
+
+    # 3. Admin approves
+    ok, msg = approve_user_registration(auth_session, new_u.id)
+    assert ok is True
+
+    # 4. Login after approval should succeed
+    user, err = authenticate_user(auth_session, "newroommate", "SecretPassword123")
+    assert user is not None
+    assert err is None
+    assert user.display_name == "New Roommate"
+    assert user.is_active is True
 
 
 def test_rate_limiting():
