@@ -483,7 +483,6 @@ def view_dashboard(current_user):
             render_dataframe(my_dep_rows)
         else:
             st.info("No deposits recorded for you yet.")
-        """, unsafe_allow_html=True)
 
 
 # ==========================================
