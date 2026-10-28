@@ -34,7 +34,7 @@ def generate_daily_whatsapp_report(session: Session, report_date: Optional[date]
     member_balances = calculate_all_balances(session, include_inactive=False)
 
     lines = []
-    lines.append(f"🍲 *MESSMATE - DAILY HOSTEL KHAATA* 🍲")
+    lines.append(f"🍲 *JANAN MESS - DAILY HOSTEL KHAATA* 🍲")
     lines.append(f"📅 *Date:* {date_str}")
     lines.append("────────────────────────")
 

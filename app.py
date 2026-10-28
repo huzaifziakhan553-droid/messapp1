@@ -69,7 +69,7 @@ from messmate.services.export import (
 
 # Set page configuration
 st.set_page_config(
-    page_title=f"{MESS_NAME} - MessMate",
+    page_title=f"{MESS_NAME}",
     page_icon="🍲",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -180,7 +180,7 @@ if "user" not in st.session_state:
 def render_login_view():
     st.markdown("""
     <div class="app-header">
-        <h1>🍲 MessMate</h1>
+        <h1>🍲 Janan Mess</h1>
         <p>Hostel Mess Management & Khaata System for Room 8 Friends</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1284,7 +1284,7 @@ def main():
         
         choice = st.radio("Go to:", menu_options, label_visibility="collapsed")
         st.divider()
-        st.caption(f"MessMate v1.0 • {'👑 Administrator Huzaifa' if is_admin else '👤 Roommate Portal'}")
+        st.caption(f"Janan Mess v1.0 • {'👑 Administrator Huzaifa' if is_admin else '👤 Roommate Portal'}")
 
     # Route page
     if choice in ["📊 Master Dashboard", "📊 My Personal Khaata"]:

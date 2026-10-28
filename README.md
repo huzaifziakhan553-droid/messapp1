@@ -1,6 +1,6 @@
-# 🍲 MessMate - Hostel Mess Management System
+# 🍲 Janan Mess - Hostel Mess Management System
 
-**MessMate** is a full-stack, centralized digital mess management and Khaata system built for university friends living together in a hostel and cooking their own meals.
+**Janan Mess** is a full-stack, centralized digital mess management and Khaata system built for university friends living together in a hostel and cooking their own meals.
 
 It eliminates manual paper registers and messy calculations with an automated, penny-exact ledger that records daily meal attendance, shared groceries/utilities, advance member deposits, personal balances, and WhatsApp reports.
 

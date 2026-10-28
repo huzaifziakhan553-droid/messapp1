@@ -54,7 +54,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MessMate - Hostel Mess Management System</title>
+    <title>Janan Mess - Hostel Mess Management System</title>
     <style>
         :root {
             --primary: #047857;
@@ -302,7 +302,7 @@ class MessMateHandler(BaseHTTPRequestHandler):
         <div style="max-width: 480px; margin: 30px auto;">
             <div class="card">
                 <div class="card-header" style="justify-content: center; border-bottom: none; padding-bottom: 0;">
-                    <h2>🍲 MessMate</h2>
+                    <h2>🍲 Janan Mess</h2>
                 </div>
                 <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px; text-align: center;">
                     Hostel Mess Khaata System for Room 8 Friends
@@ -314,7 +314,7 @@ class MessMateHandler(BaseHTTPRequestHandler):
         """
         navbar = """
         <div class="navbar">
-            <h1>🍲 MessMate</h1>
+            <h1>🍲 Janan Mess</h1>
             <div class="nav-user">Hostel Mess System</div>
         </div>
         """
@@ -386,7 +386,7 @@ class MessMateHandler(BaseHTTPRequestHandler):
 
         navbar = f"""
         <div class="navbar">
-            <h1>🍲 MessMate</h1>
+            <h1>🍲 Janan Mess</h1>
             <div class="nav-user">
                 <span>{my_pill}</span>
                 <span>👤 <strong>{user['display_name']}</strong> ({user['role'].upper()})</span>
@@ -1021,7 +1021,7 @@ def run_web_server(port=8000):
         seed_initial_eight_members(session)
     server_address = ("0.0.0.0", port)
     httpd = HTTPServer(server_address, MessMateHandler)
-    print(f"MessMate Web Server running at http://localhost:{port}")
+    print(f"Janan Mess Web Server running at http://localhost:{port}")
     print("Press Ctrl+C to stop the server.")
     try:
         httpd.serve_forever()

@@ -29,7 +29,7 @@ def print_dashboard():
         members = calculate_all_balances(session, include_inactive=False)
 
     print("\n" + "=" * 70)
-    print("                    HOSTEL MESS KHAATA DASHBOARD")
+    print("                    JANAN MESS KHAATA DASHBOARD")
     print("=" * 70)
     print(f"Mess Pool (Cash in Hand): Rs. {summary['cash_in_hand']:,.2f}")
     print(f"Total Expenses:           Rs. {summary['total_spent']:,.2f}")

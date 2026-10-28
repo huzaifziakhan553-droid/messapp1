@@ -43,7 +43,7 @@ def wa_db():
 
 def test_whatsapp_daily_report_generation(wa_db):
     report = generate_daily_whatsapp_report(wa_db, report_date=date.today())
-    assert "MESSMATE - DAILY HOSTEL KHAATA" in report
+    assert "JANAN MESS - DAILY HOSTEL KHAATA" in report
     assert "DINNER" in report
     assert "Rs. 800.00" in report
     assert "Huzaifa" in report
